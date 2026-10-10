@@ -78,14 +78,28 @@ class _AddressDTLS(interfaces.EndpointAddress):
 
         self._psk_store = SecurityStore(protocol._server_credentials)
 
-        self._dtls_socket = dtls.DTLS(
-            # FIXME: Use accessors like tinydtls (but are they needed? maybe shutdown sequence is just already better here...)
-            read=self._read,
-            write=self._write,
-            event=self._event,
-            pskId=b"The socket needs something there but we'll never use it",
-            pskStore=self._psk_store,
-        )
+        self._rpk = protocol._server_credentials.get(":rpk")
+
+        # add rpk mode
+        if self._rpk is not None:
+            rpk_keys = self._rpk
+            self._dtls_socket = dtls.DTLS(
+                read=self._read,
+                write=self._write,
+                event=self._event,
+                pskId=b"The socket needs something there but we'll never use it",
+                pskStore=self._psk_store,
+                rpk=rpk_keys,
+            )
+        else:
+            self._dtls_socket = dtls.DTLS(
+                # FIXME: Use accessors like tinydtls (but are they needed? maybe shutdown sequence is just already better here...)
+                read=self._read,
+                write=self._write,
+                event=self._event,
+                pskId=b"The socket needs something there but we'll never use it",
+                pskStore=self._psk_store,
+            )
         self._dtls_session = dtls.Session(_SENTINEL_ADDRESS, _SENTINEL_PORT)
 
         self._retransmission_task = asyncio.create_task(
@@ -141,6 +155,12 @@ class _AddressDTLS(interfaces.EndpointAddress):
         if (level, code) == (LEVEL_NOALERT, DTLS_EVENT_CONNECT):
             return
         elif (level, code) == (LEVEL_NOALERT, DTLS_EVENT_CONNECTED):
+            # after handshake check the clients
+            if self._rpk is not None:
+                peer = self._dtls_socket.getPeerRPK()
+                if peer is None:
+                    raise RuntimeError("RPK handshake completetd without verified client")
+
             # No need to react to "connected": We're not the ones sending the first message
             return
         elif (level, code) == (LEVEL_FATAL, CODE_CLOSE_NOTIFY):
